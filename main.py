@@ -10,7 +10,7 @@ from email.mime.text import MIMEText
 from email.header import Header
 
 # === 全局配置 ===
-DEFAULT_SPAXX_YIELD = 0.045
+DEFAULT_SPAXX_YIELD = 0.034
 TAX_ST = 0.37      # 短期税率
 TAX_LT = 0.238     # 长期税率
 
