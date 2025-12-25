@@ -15,10 +15,10 @@ TAX_ST = 0.37      # 短期税率
 TAX_LT = 0.238     # 长期税率
 
 # 邮件通知触发门槛
-NOTIFY_THRESHOLD_SCHD = 11.0 
-NOTIFY_THRESHOLD_AMZN = 12.0 
+NOTIFY_THRESHOLD_SCHD = 10.0
+NOTIFY_THRESHOLD_AMZN = 3.0
 
-# === 辅助函数：发送邮件 ===
+# === 辅助函数：发送邮件 (带超时保险) ===
 def send_notification(subject, body):
     sender = os.environ.get('EMAIL_USER')
     password = os.environ.get('EMAIL_PASS')
@@ -28,13 +28,19 @@ def send_notification(subject, body):
         print("\n⚠️ 未配置邮件 Secrets，跳过发送通知。(请检查 GitHub Settings -> Secrets)")
         return
 
+    # 🔥 关键修复 1: 强制清洗正文中的“幽灵空格”，防止编码报错
+    # 将 \xa0 替换为普通空格
+    clean_body = body.replace(u'\xa0', u' ')
+    clean_subject = subject.replace(u'\xa0', u' ')
+
     try:
-        msg = MIMEText(body, 'plain', 'utf-8')
+        msg = MIMEText(clean_body, 'plain', 'utf-8')
         msg['From'] = sender
         msg['To'] = receiver
-        msg['Subject'] = Header(subject, 'utf-8')
+        msg['Subject'] = Header(clean_subject, 'utf-8')
 
-        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        # 🔥 关键修复 2: 增加 timeout=30 秒，防止连接 Gmail 卡死 18 分钟
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
         server.login(sender, password)
         server.sendmail(sender, [receiver], msg.as_string())
         server.quit()
@@ -51,7 +57,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 (无条件 Top 3) ===
+# === 模块 1: SCHD Put 扫描 ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -118,15 +124,12 @@ def scan_schd():
     report_str = ""
     if top_ops:
         report_str += f"🔵 [SCHD Put Top 3] (现价 ${current_price:.2f})\n"
-        # 格式修复：先定义表头
         header = f"{'到期日':<12} {'行权价':<8} {'原价':<6} {'挂单价':<8} {'期权年化%':<10} {'双吃税前%':<10} {'LTCG等效%':<10} {'概率':<6}\n"
         report_str += header
-        report_str += "-" * len(header) + "\n"
+        report_str += "-" * 85 + "\n"
         
         for op in top_ops:
-            # 格式修复核心：先变成字符串带%，再对齐
             prob_str = f"{op['prob']:.1f}%"
-            
             report_str += (
                 f"{op['date']:<12} "
                 f"{op['strike']:<8.1f} "
@@ -135,13 +138,13 @@ def scan_schd():
                 f"{op['opt_roi']:<10.2f} "
                 f"{op['gross']:<10.2f} "
                 f"{op['ltcg']:<10.2f} "
-                f"{prob_str:<6}\n" # 这里就没有空格了
+                f"{prob_str:<6}\n"
             )
-        report_str += "-" * len(header) + "\n\n"
+        report_str += "-" * 85 + "\n\n"
         
     return current_price, top_ops, report_str
 
-# === 模块 2: AMZN Covered Call 扫描 (财报日前 + 格式修复) ===
+# === 模块 2: AMZN Covered Call 扫描 ===
 def scan_amzn():
     print(f"\n🔎 [AMZN Call] 扫描开始...")
     TICKER = "AMZN"
@@ -152,23 +155,18 @@ def scan_amzn():
         print(f"📦 AMZN 当前价格: ${current_price:.2f}")
     except: return None, [], ""
 
-    # === 获取下次财报日期 ===
+    # 获取下次财报日期
     earnings_limit_date = None
     try:
-        # yfinance 的 calendar 经常变，尝试抓取下一次财报日
         cal = stock.calendar
         if cal and isinstance(cal, dict) and 'Earnings Date' in cal:
-             # 获取列表中的第一个日期
              earnings_dates = cal['Earnings Date']
-             # 找到第一个未来的日期
              future_dates = [d for d in earnings_dates if d > datetime.now().date()]
              if future_dates:
                  earnings_limit_date = min(future_dates)
                  print(f"📅 下次财报日: {earnings_limit_date} (扫描将截止于此日期前)")
-    except: 
-        pass
+    except: pass
     
-    # 如果没抓到，给一个默认的 30 天安全期，或者你可以注释掉这行不设限
     if not earnings_limit_date:
         print("⚠️ 无法确认财报日，将扫描未来 45 天内的期权")
         earnings_limit_date = datetime.now().date() + timedelta(days=45)
@@ -181,23 +179,18 @@ def scan_amzn():
 
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
-        
-        # 🔥 核心过滤: 必须在财报日之前到期 (或当天)
         if earnings_limit_date and dt.date() >= earnings_limit_date:
             continue
             
         dte = (dt - datetime.now()).days
-        if dte < 5: continue # 剔除太短的
+        if dte < 5: continue
         
         T = dte / 365.0
 
         try:
             chain = stock.option_chain(date).calls
-            
-            # 行权价范围: 现价+8% ~ 现价+20%
             min_strike = current_price * 1.08
             max_strike = current_price * 1.20
-            
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
@@ -232,26 +225,24 @@ def scan_amzn():
     report_str = ""
     if top_ops:
         report_str += f"📦 [AMZN Call Top 5] (财报日前 | 10%-20% OTM)\n"
-        # 更新表头
         header = f"{'到期日':<12} {'行权价':<8} {'价差%':<8} {'概率':<8} {'挂单价':<8} {'税前%':<8} {'LTCG%':<8}\n"
         report_str += header
-        report_str += "-" * len(header) + "\n"
+        report_str += "-" * 85 + "\n"
         
         for op in top_ops:
-            # 🔥 格式修复：紧凑型百分比
             otm_str = f"{op['otm']:.1f}%"
             prob_str = f"{op['prob']:.1f}%"
             
             report_str += (
                 f"{op['date']:<12} "
                 f"{op['strike']:<8.0f} "
-                f"{otm_str:<8} "  # 修复后
-                f"{prob_str:<8} " # 修复后
+                f"{otm_str:<8} "
+                f"{prob_str:<8} "
                 f"{op['premium']:<8.2f} "
                 f"{op['raw']:<8.1f} "
                 f"{op['ltcg']:<8.1f}\n"
             )
-        report_str += "-" * len(header) + "\n"
+        report_str += "-" * 85 + "\n"
     else:
         print(f"⚠️ AMZN: 在财报日 ({earnings_limit_date}) 前未找到符合条件的期权")
     
