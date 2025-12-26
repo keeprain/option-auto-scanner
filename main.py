@@ -25,8 +25,7 @@ def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
 
-# === 辅助函数：调用 Gemini 进行分析 (新增功能) ===
-# === 辅助函数：调用 Gemini 进行分析 (带自检功能) ===
+# === 辅助函数：调用 Gemini 进行分析 (适配 Gemini 2.5) ===
 def get_gemini_analysis(report_text):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -35,16 +34,14 @@ def get_gemini_analysis(report_text):
     try:
         genai.configure(api_key=api_key)
         
-        # 🔥 修改点 1: 尝试使用更精确的版本号 'gemini-1.5-flash-latest'
-        # 如果这个也失败，下面的 except 会帮我们列出所有能用的模型
-        model_name = 'gemini-1.5-flash' 
-        model = genai.GenerativeModel(model_name)
+        # 🔥 修改点：根据你的可用列表，使用最新的 2.5 Flash 模型
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = f"""
         你是一个极其简练的期权交易员。请分析下方数据，针对 SCHD 和 AMZN 各推荐一个最佳行权价。
         
         要求：
-        1. 直接给出结论，不要废话。
+        1. 直接给出结论，不要废话，不要打招呼。
         2. 总字数严格控制在 100 字以内。
         3. 格式严格如下：
            🎯 SCHD: 卖出 [日期] $[价格] Put。理由：[一句话理由]
@@ -65,18 +62,8 @@ def get_gemini_analysis(report_text):
         return response.text.strip()
 
     except Exception as e:
-        # 🔥 修改点 2: 如果报错，开启“侦探模式”，打印所有可用模型
-        print(f"\n❌ 模型 {model_name} 调用失败: {e}")
-        print("🕵️ 正在尝试列出所有可用模型 (Debug Info)...")
-        try:
-            available_models = []
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    available_models.append(m.name)
-            print(f"📋 可用模型列表: {available_models}")
-            return f"❌ Gemini 配置错误，请检查 Log 中的可用模型列表。\n错误信息: {str(e)}"
-        except Exception as list_e:
-            return f"❌ 无法连接 Gemini API: {str(e)}"
+        # 如果 2.5 也挂了（极小概率），我们还是保留这个侦探模式，方便以后排查
+        return f"❌ Gemini 分析失败: {str(e)}"
 
 # === 辅助函数：发送邮件 ===
 def send_notification(subject, body):
