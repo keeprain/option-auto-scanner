@@ -26,6 +26,7 @@ def clean_str(text):
     return str(text).replace(u'\xa0', ' ').strip()
 
 # === 辅助函数：调用 Gemini 进行分析 (新增功能) ===
+# === 辅助函数：调用 Gemini 进行分析 (带自检功能) ===
 def get_gemini_analysis(report_text):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -33,26 +34,49 @@ def get_gemini_analysis(report_text):
     
     try:
         genai.configure(api_key=api_key)
-        # 使用 Gemini 1.5 Flash (速度快且免费额度高) 或 Gemini Pro
-        model = genai.GenerativeModel('gemini-pro')
+        
+        # 🔥 修改点 1: 尝试使用更精确的版本号 'gemini-1.5-flash-latest'
+        # 如果这个也失败，下面的 except 会帮我们列出所有能用的模型
+        model_name = 'gemini-1.5-flash' 
+        model = genai.GenerativeModel(model_name)
         
         prompt = f"""
-        你是一位专业的期权交易员。请阅读以下 SCHD (Cash-Secured Put) 和 AMZN (Covered Call) 的期权扫描数据。
-        请给出一段非常简练的分析和操作建议（总字数控制在 200 字以内）。
+        你是一个极其简练的期权交易员。请分析下方数据，针对 SCHD 和 AMZN 各推荐一个最佳行权价。
         
         要求：
-        1. 语气专业、客观。
-        2. 分别针对 SCHD 和 AMZN 推荐一个性价比最高的行权价，并一句话解释原因（基于真实收益率和安全性）。
-        3. 如果所有机会都很差，请直说“建议观望”。
+        1. 直接给出结论，不要废话。
+        2. 总字数严格控制在 100 字以内。
+        3. 格式严格如下：
+           🎯 SCHD: 卖出 [日期] $[价格] Put。理由：[一句话理由]
+           🎯 AMZN: 卖出 [日期] $[价格] Call。理由：[一句话理由]
+        4. 如果机会不好，直接输出：建议空仓观望。
 
-        数据如下：
+        数据：
         {report_text}
         """
         
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=150,
+                temperature=0.2
+            )
+        )
         return response.text.strip()
+
     except Exception as e:
-        return f"❌ Gemini 分析暂时不可用: {str(e)}"
+        # 🔥 修改点 2: 如果报错，开启“侦探模式”，打印所有可用模型
+        print(f"\n❌ 模型 {model_name} 调用失败: {e}")
+        print("🕵️ 正在尝试列出所有可用模型 (Debug Info)...")
+        try:
+            available_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name)
+            print(f"📋 可用模型列表: {available_models}")
+            return f"❌ Gemini 配置错误，请检查 Log 中的可用模型列表。\n错误信息: {str(e)}"
+        except Exception as list_e:
+            return f"❌ 无法连接 Gemini API: {str(e)}"
 
 # === 辅助函数：发送邮件 ===
 def send_notification(subject, body):
