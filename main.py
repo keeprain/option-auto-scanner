@@ -15,16 +15,16 @@ DEFAULT_SPAXX_YIELD = 0.034
 TAX_ST = 0.37       # 短期税率
 TAX_LT = 0.238      # 长期税率
 
-# 邮件通知触发门槛
-NOTIFY_THRESHOLD_SCHD = 10.0
-NOTIFY_THRESHOLD_AMZN = 3.0
+# 默认阈值 (监控模式用)
+DEFAULT_THRESHOLD_SCHD = 10.0
+DEFAULT_THRESHOLD_AMZN = 3.0
 
 # === 辅助函数：强力清洗字符串 ===
 def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
 
-# === 辅助函数：发送邮件 (带超时保险 + 密码清洗) ===
+# === 辅助函数：发送邮件 ===
 def send_notification(subject, body):
     raw_pass = os.environ.get('EMAIL_PASS', '')
     password = raw_pass.replace(u'\xa0', '').replace(' ', '').strip()
@@ -62,7 +62,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 (宽松版) ===
+# === 模块 1: SCHD Put 扫描 ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -129,21 +129,17 @@ def scan_schd():
     report_str = ""
     if top_ops:
         report_str += f"🔵 [SCHD Put Top 3] (现价 ${current_price:.2f})\n"
-        
-        # 🔥 UI 优化：宽松版表头
-        # 增加间距：日期(14) 行权(12) 原价(10) 挂单(10) 年化(12) 双吃(12) LTCG(12) 概率(8)
         header = "到期日        行权价      原价      挂单价    期权年化%   双吃税前%   LTCG等效%   概率    \n"
-        
         report_str += header
         report_str += "-" * 105 + "\n"
         
         for op in top_ops:
             prob_str = f"{op['prob']:.1f}%"
             report_str += (
-                f"{op['date']:<14} "     
-                f"{op['strike']:<12.2f} " 
-                f"{op['mid_raw']:<10.2f} " 
-                f"{op['price']:<10.2f} "   
+                f"{op['date']:<14} "
+                f"{op['strike']:<12.2f} "
+                f"{op['mid_raw']:<10.2f} "
+                f"{op['price']:<10.2f} "
                 f"{op['opt_roi']:<12.2f} "
                 f"{op['gross']:<12.2f} "
                 f"{op['ltcg']:<12.2f} "
@@ -153,7 +149,7 @@ def scan_schd():
         
     return current_price, top_ops, report_str
 
-# === 模块 2: AMZN Covered Call 扫描 (新顺序 + 宽松版) ===
+# === 模块 2: AMZN Covered Call 扫描 ===
 def scan_amzn():
     print(f"\n🔎 [AMZN Call] 扫描开始...")
     TICKER = "AMZN"
@@ -234,12 +230,7 @@ def scan_amzn():
     report_str = ""
     if top_ops:
         report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 10%-20% OTM)\n"
-        
-        # 🔥 UI 优化：新顺序 + 宽松间距
-        # 顺序：到期日 -> 行权价 -> 价差 -> 挂单价 -> 税前% -> LTCG% -> 概率
-        # 间距：日期(14) 行权(10) 价差(10) 挂单(10) 税前(10) LTCG(10) 概率(10)
         header = "到期日        行权价    价差%     挂单价    税前%     LTCG%     概率      \n"
-        
         report_str += header
         report_str += "-" * 105 + "\n"
         
@@ -266,6 +257,21 @@ def scan_amzn():
 def job():
     print(f"🚀 任务启动: {datetime.now()} UTC")
     
+    # 🔥 获取运行模式 (MONITOR=监控, SUMMARY=每日汇总)
+    run_mode = os.environ.get('RUN_MODE', 'MONITOR')
+    
+    # 动态调整阈值
+    if run_mode == 'SUMMARY':
+        threshold_schd = -100.0 # 强制发送
+        threshold_amzn = -100.0
+        subject_prefix = "📅 [每日汇总]"
+        print("📊 运行模式: 每日汇总 (强制发送)")
+    else:
+        threshold_schd = DEFAULT_THRESHOLD_SCHD
+        threshold_amzn = DEFAULT_THRESHOLD_AMZN
+        subject_prefix = "🚨 [捡钱机会]"
+        print(f"👀 运行模式: 实时监控 (阈值 SCHD>{threshold_schd}, AMZN>{threshold_amzn})")
+
     schd_price, schd_list, schd_text = scan_schd()
     amzn_price, amzn_list, amzn_text = scan_amzn()
     
@@ -275,20 +281,21 @@ def job():
     should_notify = False
     title_parts = []
 
-    if schd_list and schd_list[0]['ltcg'] > NOTIFY_THRESHOLD_SCHD:
+    # 检查是否满足阈值
+    if schd_list and schd_list[0]['ltcg'] > threshold_schd:
         should_notify = True
         title_parts.append(f"SCHD {schd_list[0]['ltcg']:.1f}%")
         
-    if amzn_list and amzn_list[0]['ltcg'] > NOTIFY_THRESHOLD_AMZN:
+    if amzn_list and amzn_list[0]['ltcg'] > threshold_amzn:
         should_notify = True
         title_parts.append(f"AMZN {amzn_list[0]['ltcg']:.1f}%")
 
     if should_notify:
         full_report = schd_text + "\n" + amzn_text
-        subject = "🚨 捡钱机会: " + " | ".join(title_parts)
+        subject = f"{subject_prefix} " + " | ".join(title_parts)
         send_notification(subject, full_report)
     else:
-        print(f"😴 结果未达通知门槛 (SCHD > {NOTIFY_THRESHOLD_SCHD}%, AMZN > {NOTIFY_THRESHOLD_AMZN}%)")
+        print("😴 结果未达阈值，不发送邮件")
 
 if __name__ == "__main__":
     job()
