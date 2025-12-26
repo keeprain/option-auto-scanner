@@ -59,6 +59,12 @@ def save_history_to_csv(schd_items, amzn_items):
 
     # 转换为 DataFrame
     df_new = pd.DataFrame(all_records)
+
+    # 🔥 [新增] 只有这里变了：将所有数值保留2位小数
+    numeric_cols = ['strike', 'price', 'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'mid_raw']
+    for col in numeric_cols:
+        if col in df_new.columns:
+            df_new[col] = df_new[col].round(2)
     
     # 整理列顺序 (统一使用 price 和 raw_yield)
     columns_order = [
