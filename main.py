@@ -55,7 +55,7 @@ def get_gemini_analysis(report_text):
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1000,
+                max_output_tokens=10000,
                 temperature=0.2
             )
         )
