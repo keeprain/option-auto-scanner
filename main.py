@@ -20,10 +20,60 @@ TAX_LT = 0.238      # 长期税率
 DEFAULT_THRESHOLD_SCHD = 10.0
 DEFAULT_THRESHOLD_AMZN = 3.0
 
+# 🔥 [新增] 数据保存文件名
+HISTORY_FILE = "option_history.csv"
+
 # === 辅助函数：强力清洗字符串 ===
 def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
+
+# 🔥 [新增] 辅助函数：保存数据到 CSV
+def save_history_to_csv(schd_items, amzn_items):
+    all_records = []
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 提取 SCHD 数据
+    if schd_items:
+        for item in schd_items:
+            record = item.copy()
+            record['ticker'] = 'SCHD'
+            record['timestamp'] = timestamp
+            record['type'] = 'Put'
+            all_records.append(record)
+            
+    # 提取 AMZN 数据
+    if amzn_items:
+        for item in amzn_items:
+            record = item.copy()
+            record['ticker'] = 'AMZN'
+            record['timestamp'] = timestamp
+            record['type'] = 'Call'
+            all_records.append(record)
+
+    if not all_records:
+        return
+
+    # 转换为 DataFrame 并保存
+    df_new = pd.DataFrame(all_records)
+    
+    # 整理列顺序
+    columns_order = [
+        'timestamp', 'ticker', 'type', 'date', 'strike', 'price', 
+        'ltcg', 'prob', 'gross', 'opt_roi', 'real_profit', 'mid_raw', 
+        'otm', 'premium', 'raw'
+    ]
+    final_cols = [c for c in columns_order if c in df_new.columns]
+    df_new = df_new[final_cols]
+
+    file_exists = os.path.isfile(HISTORY_FILE)
+    
+    try:
+        # 追加模式保存
+        df_new.to_csv(HISTORY_FILE, mode='a', header=not file_exists, index=False)
+        print(f"💾 已保存 {len(df_new)} 条历史记录")
+    except Exception as e:
+        print(f"❌ 保存 CSV 失败: {e}")
 
 # === 辅助函数：调用 Gemini 进行分析 (适配 Gemini 2.5) ===
 def get_gemini_analysis(report_text):
@@ -338,6 +388,9 @@ def job():
     
     if schd_text: print(schd_text)
     if amzn_text: print(amzn_text)
+
+    # 🔥 [新增] 无论是否发邮件，都保存数据！
+    save_history_to_csv(schd_list, amzn_list)
     
     should_notify = False
     title_parts = []
