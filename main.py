@@ -96,7 +96,7 @@ def scan_schd():
 
         try:
             chain = stock.option_chain(date).puts
-            chain = chain[(chain['strike'] < current_price) & (chain['strike'] > current_price * 0.95)]
+            chain = chain[(chain['strike'] < current_price * 1.02) & (chain['strike'] > current_price * 0.95)]
             
             for _, row in chain.iterrows():
                 mid = (row['bid'] + row['ask']) / 2
