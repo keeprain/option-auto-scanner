@@ -5,7 +5,7 @@ import smtplib
 import unicodedata
 import pandas as pd
 import numpy as np
-import google.generativeai as genai  # 🔥 新增 Gemini 库
+import google.generativeai as genai
 from datetime import datetime, timedelta
 from scipy.stats import norm
 from email.mime.text import MIMEText
@@ -20,7 +20,7 @@ TAX_LT = 0.238      # 长期税率
 DEFAULT_THRESHOLD_SCHD = 10.0
 DEFAULT_THRESHOLD_AMZN = 3.0
 
-# 🔥 [新增] 数据保存文件名
+# 数据保存文件名
 HISTORY_FILE = "option_history.csv"
 
 # === 辅助函数：强力清洗字符串 ===
@@ -28,12 +28,15 @@ def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
 
-# 🔥 [新增] 辅助函数：保存数据到 CSV
+# === 辅助函数：保存数据到 CSV (列名已统一) ===
 def save_history_to_csv(schd_items, amzn_items):
+    """
+    将当天的 Top 机会追加保存到 CSV 文件中
+    """
     all_records = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    # 提取 SCHD 数据
+    # 处理 SCHD 数据
     if schd_items:
         for item in schd_items:
             record = item.copy()
@@ -42,7 +45,7 @@ def save_history_to_csv(schd_items, amzn_items):
             record['type'] = 'Put'
             all_records.append(record)
             
-    # 提取 AMZN 数据
+    # 处理 AMZN 数据
     if amzn_items:
         for item in amzn_items:
             record = item.copy()
@@ -54,28 +57,29 @@ def save_history_to_csv(schd_items, amzn_items):
     if not all_records:
         return
 
-    # 转换为 DataFrame 并保存
+    # 转换为 DataFrame
     df_new = pd.DataFrame(all_records)
     
-    # 整理列顺序
+    # 整理列顺序 (统一使用 price 和 raw_yield)
     columns_order = [
         'timestamp', 'ticker', 'type', 'date', 'strike', 'price', 
-        'ltcg', 'prob', 'gross', 'opt_roi', 'real_profit', 'mid_raw', 
-        'otm', 'premium', 'raw'
+        'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'mid_raw'
     ]
+    # 只保留存在的列，防止报错
     final_cols = [c for c in columns_order if c in df_new.columns]
     df_new = df_new[final_cols]
 
+    # 检查文件是否存在
     file_exists = os.path.isfile(HISTORY_FILE)
     
     try:
-        # 追加模式保存
+        # 追加模式 'a'，如果文件不存在则写入表头
         df_new.to_csv(HISTORY_FILE, mode='a', header=not file_exists, index=False)
-        print(f"💾 已保存 {len(df_new)} 条历史记录")
+        print(f"💾 已保存 {len(df_new)} 条记录到 {HISTORY_FILE}")
     except Exception as e:
         print(f"❌ 保存 CSV 失败: {e}")
 
-# === 辅助函数：调用 Gemini 进行分析 (适配 Gemini 2.5) ===
+# === 辅助函数：调用 Gemini 进行分析 (回归专业详尽版) ===
 def get_gemini_analysis(report_text):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -84,9 +88,10 @@ def get_gemini_analysis(report_text):
     try:
         genai.configure(api_key=api_key)
         
-        # 🔥 修改点：根据你的可用列表，使用最新的 2.5 Flash 模型
+        # 使用你 Log 里确认可用的 2.5 Flash
         model = genai.GenerativeModel('gemini-2.5-flash')
-
+        
+        # 🔥🔥🔥 回归旧版本的 Prompt 🔥🔥🔥
         prompt = f"""
         你是一位专业的期权交易员。请阅读以下 SCHD (Cash-Secured Put) 和 AMZN (Covered Call) 的期权扫描数据。
         请给出一段非常简练的分析和操作建议（总字数控制在 200 字以内）。
@@ -103,14 +108,13 @@ def get_gemini_analysis(report_text):
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                max_output_tokens=10000,
+                max_output_tokens=8000,  # 🔥 给足空间，防止截断
                 temperature=0.2
             )
         )
         return response.text.strip()
 
     except Exception as e:
-        # 如果 2.5 也挂了（极小概率），我们还是保留这个侦探模式，方便以后排查
         return f"❌ Gemini 分析失败: {str(e)}"
 
 # === 辅助函数：发送邮件 ===
@@ -151,7 +155,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 ===
+# === 模块 1: SCHD Put 扫描 (含 Debug Log) ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -186,12 +190,9 @@ def scan_schd():
         try:
             chain = stock.option_chain(date).puts
             
-            # 🔥 [Debug] 打印原始数据概况 (不会进邮件)
+            # [DEBUG]
             print(f"   [DEBUG] {date}: 原始 Put 数量 {len(chain)}")
-            # 打印前2条原始数据，看看 Yahoo 到底给了什么
-            if not chain.empty:
-                print(f"   [DEBUG] Sample:\n{chain[['strike', 'bid', 'ask', 'impliedVolatility']].head(2).to_string(index=False)}")
-            
+
             min_strike = current_price * 0.95
             max_strike = current_price * 1.02
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
@@ -220,7 +221,7 @@ def scan_schd():
                     "mid_raw": mid,
                     "price": price,              
                     "real_profit": extrinsic_value, 
-                    "opt_roi": opt_roi * 100,    
+                    "raw_yield": opt_roi * 100,  # 统一列名
                     "gross": total_gross * 100,
                     "ltcg": ltcg_equiv * 100,
                     "prob": prob * 100
@@ -245,7 +246,7 @@ def scan_schd():
                 f"{op['strike']:<12.2f} "
                 f"{op['mid_raw']:<10.2f} "
                 f"{op['price']:<10.2f} "
-                f"{op['opt_roi']:<12.2f} "
+                f"{op['raw_yield']:<12.2f} " # 统一列名
                 f"{op['gross']:<12.2f} "
                 f"{op['ltcg']:<12.2f} "
                 f"{prob_str:<8}\n"
@@ -255,7 +256,7 @@ def scan_schd():
         
     return current_price, top_ops, report_str
 
-# === 模块 2: AMZN Covered Call 扫描 ===
+# === 模块 2: AMZN Covered Call 扫描 (含 Debug Log) ===
 def scan_amzn():
     print(f"\n🔎 [AMZN Call] 扫描开始...")
     TICKER = "AMZN"
@@ -300,11 +301,9 @@ def scan_amzn():
         try:
             chain = stock.option_chain(date).calls
             
-            # 🔥 [Debug] 打印原始数据概况
+            # [DEBUG]
             print(f"   [DEBUG] {date}: 原始 Call 数量 {len(chain)}")
-            if not chain.empty:
-                 print(f"   [DEBUG] Sample:\n{chain[['strike', 'bid', 'ask', 'impliedVolatility']].head(2).to_string(index=False)}")
-                
+
             min_strike = current_price * 1.08
             max_strike = current_price * 1.20
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
@@ -329,9 +328,9 @@ def scan_amzn():
                     "date": date,
                     "strike": row['strike'],
                     "otm": otm_pct,
-                    "premium": price,
+                    "price": price,              # 统一列名
                     "prob": prob_assign * 100,
-                    "raw": raw_yield * 100,
+                    "raw_yield": raw_yield * 100,# 统一列名
                     "ltcg": ltcg_equiv * 100
                 })
         except Exception as e:
@@ -355,8 +354,8 @@ def scan_amzn():
                 f"{op['date']:<14} "
                 f"{op['strike']:<10.0f} "
                 f"{otm_str:<10} "
-                f"{op['premium']:<10.2f} "
-                f"{op['raw']:<10.1f} "
+                f"{op['price']:<10.2f} "      # 统一列名
+                f"{op['raw_yield']:<10.1f} "  # 统一列名
                 f"{op['ltcg']:<10.1f} "
                 f"{prob_str:<10}\n"
             )
@@ -388,8 +387,8 @@ def job():
     
     if schd_text: print(schd_text)
     if amzn_text: print(amzn_text)
-
-    # 🔥 [新增] 无论是否发邮件，都保存数据！
+    
+    # 🔥 保存数据到 CSV (无论是否发邮件)
     save_history_to_csv(schd_list, amzn_list)
     
     should_notify = False
@@ -406,15 +405,11 @@ def job():
     if should_notify:
         full_report = schd_text + "\n" + amzn_text
         
-        # 🔥🔥🔥 召唤 Gemini 进行分析 🔥🔥🔥
         print("🤖 正在请求 Gemini 进行分析...")
         gemini_analysis = get_gemini_analysis(full_report)
         print("🤖 分析完成")
         
-        # 组合邮件内容
         final_body = full_report + "\n" + "="*40 + "\n🤖 [Gemini 智能分析建议]\n" + "="*40 + "\n" + gemini_analysis
-        
-        # 加上时间戳防折叠
         final_body += f"\n\n(自动生成于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC)"
         
         subject = f"{subject_prefix} " + " | ".join(title_parts)
