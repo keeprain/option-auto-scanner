@@ -62,7 +62,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 (Top 5 + 真实收益) ===
+# === 模块 1: SCHD Put 扫描 (智能剔除虚假收益) ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -97,7 +97,7 @@ def scan_schd():
         try:
             chain = stock.option_chain(date).puts
             
-            # 范围: 95% - 102%
+            # 🔥 修改点 1: 扩大范围 95% - 102% (允许轻度实值 ITM)
             min_strike = current_price * 0.95
             max_strike = current_price * 1.02
             
@@ -112,12 +112,16 @@ def scan_schd():
                 iv = row.get('impliedVolatility', 0) or 0.12
                 prob = calculate_probability(current_price, row['strike'], T, spaxx_yield, iv, 'put')
 
-                # 计算真实外在价值 (剔除 ITM 水分)
+                # 🔥 修改点 2: 计算“真实收益基数” (Extrinsic Value)
+                # 如果行权价 > 现价，权利金里有一部分是“你自己多付的钱”(Intrinsic)，要扣掉
                 intrinsic_value = max(0.0, row['strike'] - current_price)
                 extrinsic_value = price - intrinsic_value
+                
+                # 如果算出来是负数（比如买卖价差太大导致），归零
                 if extrinsic_value < 0: extrinsic_value = 0
                 
-                # 基于真实价值计算收益率
+                # 🔥 修改点 3: 所有的收益率计算，都基于“外在价值/时间价值”
+                # 这样即使是 ITM Put，也不会因为权利金高而虚报收益
                 opt_roi = (extrinsic_value / row['strike']) * (365 / dte)
                 total_gross = opt_roi + spaxx_yield
                 net_yield = total_gross * (1 - TAX_ST)
@@ -127,27 +131,29 @@ def scan_schd():
                     "date": date,
                     "strike": row['strike'],
                     "mid_raw": mid,
-                    "price": price,              
-                    "real_profit": extrinsic_value, 
-                    "opt_roi": opt_roi * 100,    
+                    "price": price,              # 挂单价 (全额)
+                    "real_profit": extrinsic_value, # 真实获利部分 (用于内部排序)
+                    "opt_roi": opt_roi * 100,    # 基于真实获利的年化
                     "gross": total_gross * 100,
                     "ltcg": ltcg_equiv * 100,
                     "prob": prob * 100
                 })
         except: continue
     
-    # 🔥 修改点：Top 3 -> Top 5
+    # 排序依然按 LTCG (现在是真实的 LTCG 了)
     top_ops = sorted(opportunities, key=lambda x: x['ltcg'], reverse=True)[:5]
     
     report_str = ""
     if top_ops:
-        report_str += f"🔵 [SCHD Put Top 5] (现价 ${current_price:.2f})\n"
+        report_str += f"🔵 [SCHD Put Top 3] (现价 ${current_price:.2f})\n"
+        # 增加一列 '实值' 提示，如果行权价>现价，标注出来
         header = "到期日        行权价      原价      挂单价    真实年化%   真实LTCG%   概率      \n"
         report_str += header
         report_str += "-" * 105 + "\n"
         
         for op in top_ops:
             prob_str = f"{op['prob']:.1f}%"
+            # 挂单价还是显示 price (你要输入的单子)，但年化和 LTCG 显示的是剔除水分后的
             report_str += (
                 f"{op['date']:<14} "
                 f"{op['strike']:<12.2f} "
@@ -217,4 +223,95 @@ def scan_amzn():
                 price = math.floor(mid / 0.05) * 0.05
                 if price <= 0.01: continue
                 
-                iv = row
+                iv = row.get('impliedVolatility', 0) or 0.25
+                prob_assign = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
+                
+                if prob_assign >= 0.20: continue 
+                
+                otm_pct = (row['strike'] - current_price) / current_price * 100
+                raw_yield = (price / current_price) * (365 / dte)
+                net_yield = raw_yield * (1 - TAX_ST)
+                ltcg_equiv = net_yield / (1 - TAX_LT)
+                
+                opportunities.append({
+                    "date": date,
+                    "strike": row['strike'],
+                    "otm": otm_pct,
+                    "premium": price,
+                    "prob": prob_assign * 100,
+                    "raw": raw_yield * 100,
+                    "ltcg": ltcg_equiv * 100
+                })
+        except: continue
+
+    top_ops = sorted(opportunities, key=lambda x: x['ltcg'], reverse=True)[:5]
+    
+    report_str = ""
+    if top_ops:
+        report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 10%-20% OTM)\n"
+        header = "到期日        行权价    价差%     挂单价    税前%     LTCG%     概率      \n"
+        report_str += header
+        report_str += "-" * 105 + "\n"
+        
+        for op in top_ops:
+            otm_str = f"{op['otm']:.1f}%"
+            prob_str = f"{op['prob']:.1f}%"
+            
+            report_str += (
+                f"{op['date']:<14} "
+                f"{op['strike']:<10.0f} "
+                f"{otm_str:<10} "
+                f"{op['premium']:<10.2f} "
+                f"{op['raw']:<10.1f} "
+                f"{op['ltcg']:<10.1f} "
+                f"{prob_str:<10}\n"
+            )
+        report_str += "-" * 105 + "\n"
+    else:
+        print(f"⚠️ AMZN: 在财报日 ({earnings_limit_date}) 前未找到符合条件的期权")
+    
+    return current_price, top_ops, report_str
+
+# === 主程序 ===
+def job():
+    print(f"🚀 任务启动: {datetime.now()} UTC")
+    
+    run_mode = os.environ.get('RUN_MODE', 'MONITOR')
+    
+    if run_mode == 'SUMMARY':
+        threshold_schd = -100.0
+        threshold_amzn = -100.0
+        subject_prefix = "📅 [每日汇总]"
+        print("📊 运行模式: 每日汇总")
+    else:
+        threshold_schd = DEFAULT_THRESHOLD_SCHD
+        threshold_amzn = DEFAULT_THRESHOLD_AMZN
+        subject_prefix = "🚨 [捡钱机会]"
+        print(f"👀 运行模式: 实时监控 (阈值 >{threshold_schd}, >{threshold_amzn})")
+
+    schd_price, schd_list, schd_text = scan_schd()
+    amzn_price, amzn_list, amzn_text = scan_amzn()
+    
+    if schd_text: print(schd_text)
+    if amzn_text: print(amzn_text)
+    
+    should_notify = False
+    title_parts = []
+
+    if schd_list and schd_list[0]['ltcg'] > threshold_schd:
+        should_notify = True
+        title_parts.append(f"SCHD {schd_list[0]['ltcg']:.1f}%")
+        
+    if amzn_list and amzn_list[0]['ltcg'] > threshold_amzn:
+        should_notify = True
+        title_parts.append(f"AMZN {amzn_list[0]['ltcg']:.1f}%")
+
+    if should_notify:
+        full_report = schd_text + "\n" + amzn_text
+        subject = f"{subject_prefix} " + " | ".join(title_parts)
+        send_notification(subject, full_report)
+    else:
+        print("😴 结果未达阈值")
+
+if __name__ == "__main__":
+    job()
