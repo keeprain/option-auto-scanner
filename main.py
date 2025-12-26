@@ -5,6 +5,7 @@ import smtplib
 import unicodedata
 import pandas as pd
 import numpy as np
+import google.generativeai as genai  # 🔥 新增 Gemini 库
 from datetime import datetime, timedelta
 from scipy.stats import norm
 from email.mime.text import MIMEText
@@ -23,6 +24,35 @@ DEFAULT_THRESHOLD_AMZN = 3.0
 def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
+
+# === 辅助函数：调用 Gemini 进行分析 (新增功能) ===
+def get_gemini_analysis(report_text):
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return "⚠️ 未配置 GEMINI_API_KEY，跳过智能分析。"
+    
+    try:
+        genai.configure(api_key=api_key)
+        # 使用 Gemini 1.5 Flash (速度快且免费额度高) 或 Gemini Pro
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        你是一位专业的期权交易员。请阅读以下 SCHD (Cash-Secured Put) 和 AMZN (Covered Call) 的期权扫描数据。
+        请给出一段非常简练的分析和操作建议（总字数控制在 200 字以内）。
+        
+        要求：
+        1. 语气专业、客观。
+        2. 分别针对 SCHD 和 AMZN 推荐一个性价比最高的行权价，并一句话解释原因（基于真实收益率和安全性）。
+        3. 如果所有机会都很差，请直说“建议观望”。
+
+        数据如下：
+        {report_text}
+        """
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"❌ Gemini 分析暂时不可用: {str(e)}"
 
 # === 辅助函数：发送邮件 ===
 def send_notification(subject, body):
@@ -62,7 +92,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 (完整无误版) ===
+# === 模块 1: SCHD Put 扫描 ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -96,11 +126,8 @@ def scan_schd():
 
         try:
             chain = stock.option_chain(date).puts
-            
-            # 范围: 95% - 102%
             min_strike = current_price * 0.95
             max_strike = current_price * 1.02
-            
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
@@ -112,7 +139,6 @@ def scan_schd():
                 iv = row.get('impliedVolatility', 0) or 0.12
                 prob = calculate_probability(current_price, row['strike'], T, spaxx_yield, iv, 'put')
 
-                # 真实收益逻辑
                 intrinsic_value = max(0.0, row['strike'] - current_price)
                 extrinsic_value = price - intrinsic_value
                 if extrinsic_value < 0: extrinsic_value = 0
@@ -140,7 +166,6 @@ def scan_schd():
     report_str = ""
     if top_ops:
         report_str += f"🔵 [SCHD Put Top 5] (现价 ${current_price:.2f})\n"
-        
         header = "到期日        行权价      原价      挂单价    真实年化%   双吃税前%   真实LTCG%   概率      \n"
         report_str += header
         report_str += "-" * 115 + "\n"
@@ -153,7 +178,7 @@ def scan_schd():
                 f"{op['mid_raw']:<10.2f} "
                 f"{op['price']:<10.2f} "
                 f"{op['opt_roi']:<12.2f} "
-                f"{op['gross']:<12.2f} " 
+                f"{op['gross']:<12.2f} "
                 f"{op['ltcg']:<12.2f} "
                 f"{prob_str:<8}\n"
             )
@@ -173,7 +198,6 @@ def scan_amzn():
         print(f"📦 AMZN 当前价格: ${current_price:.2f}")
     except: return None, [], ""
 
-    # 获取下次财报日期
     earnings_limit_date = None
     try:
         cal = stock.calendar
@@ -303,11 +327,19 @@ def job():
     if should_notify:
         full_report = schd_text + "\n" + amzn_text
         
-        # 🔥 关键：在邮件末尾加一个动态时间戳，防止 Gmail 折叠
-        full_report += f"\n\n(自动生成于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC)"
+        # 🔥🔥🔥 召唤 Gemini 进行分析 🔥🔥🔥
+        print("🤖 正在请求 Gemini 进行分析...")
+        gemini_analysis = get_gemini_analysis(full_report)
+        print("🤖 分析完成")
+        
+        # 组合邮件内容
+        final_body = full_report + "\n" + "="*40 + "\n🤖 [Gemini 智能分析建议]\n" + "="*40 + "\n" + gemini_analysis
+        
+        # 加上时间戳防折叠
+        final_body += f"\n\n(自动生成于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC)"
         
         subject = f"{subject_prefix} " + " | ".join(title_parts)
-        send_notification(subject, full_report)
+        send_notification(subject, final_body)
     else:
         print("😴 结果未达阈值")
 
