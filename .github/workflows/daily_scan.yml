@@ -11,6 +11,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # 🔥 [新增] 必须加这几行，否则 git push 会报错
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -32,3 +36,19 @@ jobs:
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
         run: python main.py
+
+        # 🔥 新增步骤：把生成的 CSV 提交回仓库
+      - name: Commit and Push Data
+        run: |
+          # 配置 git 用户身份
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          # 尝试添加 CSV 文件
+          git add option_history.csv
+          
+          # 如果没有变化（比如周末没数据），就不报错
+          git commit -m "📈 Auto-update option history [skip ci]" || exit 0
+          
+          # 推送到仓库
+          git push
