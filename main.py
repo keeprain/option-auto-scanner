@@ -11,8 +11,8 @@ from email.header import Header
 
 # === 全局配置 ===
 DEFAULT_SPAXX_YIELD = 0.034
-TAX_ST = 0.37      # 短期税率
-TAX_LT = 0.238     # 长期税率
+TAX_ST = 0.37       # 短期税率
+TAX_LT = 0.238      # 长期税率
 
 # 邮件通知触发门槛
 NOTIFY_THRESHOLD_SCHD = 10.0
@@ -28,18 +28,21 @@ def send_notification(subject, body):
         print("\n⚠️ 未配置邮件 Secrets，跳过发送通知。(请检查 GitHub Settings -> Secrets)")
         return
 
-    # 🔥 关键修复 1: 强制清洗正文中的“幽灵空格”，防止编码报错
-    # 将 \xa0 替换为普通空格
-    clean_body = body.replace(u'\xa0', u' ')
-    clean_subject = subject.replace(u'\xa0', u' ')
+    # 🔥 强力清洗：即使传入了幽灵空格，也在这里被消灭
+    # 使用 normalize 或者 replace 来处理
+    clean_body = str(body).replace(u'\xa0', ' ').replace('\xa0', ' ')
+    clean_subject = str(subject).replace(u'\xa0', ' ').replace('\xa0', ' ')
 
     try:
+        # 构建邮件对象
         msg = MIMEText(clean_body, 'plain', 'utf-8')
         msg['From'] = sender
         msg['To'] = receiver
+        
+        # 显式指定 Header 编码
         msg['Subject'] = Header(clean_subject, 'utf-8')
 
-        # 🔥 关键修复 2: 增加 timeout=30 秒，防止连接 Gmail 卡死 18 分钟
+        # 连接 Gmail (增加 30秒 超时)
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
         server.login(sender, password)
         server.sendmail(sender, [receiver], msg.as_string())
@@ -271,6 +274,7 @@ def job():
 
     if should_notify:
         full_report = schd_text + "\n" + amzn_text
+        # 手动敲入了分隔符，确保是普通空格
         subject = "🚨 捡钱机会: " + " | ".join(title_parts)
         send_notification(subject, full_report)
     else:
