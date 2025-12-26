@@ -22,14 +22,13 @@ NOTIFY_THRESHOLD_AMZN = 3.0
 # === 辅助函数：强力清洗字符串 ===
 def clean_str(text):
     if not text: return ""
-    # 标准化并移除幽灵空格
     return str(text).replace(u'\xa0', ' ').strip()
 
 # === 辅助函数：发送邮件 (带超时保险 + 密码清洗) ===
 def send_notification(subject, body):
-    # 1. 读取并强力清洗 Secrets (这是之前的报错根源！)
-    # Google 密码通常是 16 位，如果有空格直接删掉，防止 \xa0 报错
+    # 1. 读取并清洗 Secrets
     raw_pass = os.environ.get('EMAIL_PASS', '')
+    # 移除所有空格和 \xa0，防止复制粘贴带来的格式错误
     password = raw_pass.replace(u'\xa0', '').replace(' ', '').strip()
     
     sender = clean_str(os.environ.get('EMAIL_USER'))
@@ -39,7 +38,7 @@ def send_notification(subject, body):
         print("\n⚠️ 未配置邮件 Secrets，跳过发送通知。")
         return
 
-    # 2. 清洗正文和标题
+    # 2. 清洗正文
     clean_body = clean_str(body)
     clean_subject = clean_str(subject)
 
@@ -51,7 +50,7 @@ def send_notification(subject, body):
 
         # 3. 连接 Gmail (30秒超时)
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
-        server.login(sender, password) # 这里的 password 已经被洗得很干净了
+        server.login(sender, password)
         server.sendmail(sender, [receiver], msg.as_string())
         server.quit()
         print(f"✅ 通知已发送给 {receiver}")
@@ -67,7 +66,7 @@ def calculate_probability(S, K, T, r, sigma, option_type='call'):
     else:
         return norm.cdf(-d1)
 
-# === 模块 1: SCHD Put 扫描 ===
+# === 模块 1: SCHD Put 扫描 (UI 修正版) ===
 def scan_schd():
     print(f"\n🔎 [SCHD Put] 扫描开始...")
     TICKER = "SCHD"
@@ -134,27 +133,32 @@ def scan_schd():
     report_str = ""
     if top_ops:
         report_str += f"🔵 [SCHD Put Top 3] (现价 ${current_price:.2f})\n"
-        header = f"{'到期日':<12} {'行权价':<8} {'原价':<6} {'挂单价':<8} {'期权年化%':<10} {'双吃税前%':<10} {'LTCG等效%':<10} {'概率':<6}\n"
+        
+        # 🔥 UI 修复：手动调整中文表头空格，使其视觉对齐
+        # 数据列宽: 日期(12) 行权(10) 原价(8) 挂单(8) 年化(10) 双吃(10) LTCG(10) 概率(6)
+        # 中文占2字符宽，所以手动补空格
+        header = "到期日      行权价    原价    挂单价  期权年化% 双吃税前% LTCG等效% 概率  \n"
+        
         report_str += header
-        report_str += "-" * 85 + "\n"
+        report_str += "-" * 88 + "\n"
         
         for op in top_ops:
             prob_str = f"{op['prob']:.1f}%"
             report_str += (
-                f"{op['date']:<12} "
-                f"{op['strike']:<8.1f} "
-                f"{op['mid_raw']:<6.2f} "
-                f"{op['price']:<8.2f} "
+                f"{op['date']:<12} "     # 12 chars
+                f"{op['strike']:<10.2f} " # 10 chars
+                f"{op['mid_raw']:<8.2f} " # 8 chars
+                f"{op['price']:<8.2f} "   # 8 chars
                 f"{op['opt_roi']:<10.2f} "
                 f"{op['gross']:<10.2f} "
                 f"{op['ltcg']:<10.2f} "
                 f"{prob_str:<6}\n"
             )
-        report_str += "-" * 85 + "\n\n"
+        report_str += "-" * 88 + "\n\n"
         
     return current_price, top_ops, report_str
 
-# === 模块 2: AMZN Covered Call 扫描 ===
+# === 模块 2: AMZN Covered Call 扫描 (UI 修正版) ===
 def scan_amzn():
     print(f"\n🔎 [AMZN Call] 扫描开始...")
     TICKER = "AMZN"
@@ -174,7 +178,7 @@ def scan_amzn():
              future_dates = [d for d in earnings_dates if d > datetime.now().date()]
              if future_dates:
                  earnings_limit_date = min(future_dates)
-                 print(f"📅 下次财报日: {earnings_limit_date} (扫描将截止于此日期前)")
+                 print(f"📅 下次财报日: {earnings_limit_date}")
     except: pass
     
     if not earnings_limit_date:
@@ -234,10 +238,15 @@ def scan_amzn():
     
     report_str = ""
     if top_ops:
-        report_str += f"📦 [AMZN Call Top 5] (财报日前 | 10%-20% OTM)\n"
-        header = f"{'到期日':<12} {'行权价':<8} {'价差%':<8} {'概率':<8} {'挂单价':<8} {'税前%':<8} {'LTCG%':<8}\n"
+        # 🔥 UI 修复 1: 在标题中加入现价
+        report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 10%-20% OTM)\n"
+        
+        # 🔥 UI 修复 2: 手动对齐表头
+        # 数据列宽: 日期(12) 行权(8) 价差(8) 概率(8) 挂单(8) 税前(8) LTCG(8)
+        header = "到期日      行权价  价差%   概率    挂单价  税前%   LTCG%   \n"
+        
         report_str += header
-        report_str += "-" * 85 + "\n"
+        report_str += "-" * 88 + "\n"
         
         for op in top_ops:
             otm_str = f"{op['otm']:.1f}%"
@@ -252,7 +261,7 @@ def scan_amzn():
                 f"{op['raw']:<8.1f} "
                 f"{op['ltcg']:<8.1f}\n"
             )
-        report_str += "-" * 85 + "\n"
+        report_str += "-" * 88 + "\n"
     else:
         print(f"⚠️ AMZN: 在财报日 ({earnings_limit_date}) 前未找到符合条件的期权")
     
