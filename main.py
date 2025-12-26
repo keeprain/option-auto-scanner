@@ -135,6 +135,13 @@ def scan_schd():
 
         try:
             chain = stock.option_chain(date).puts
+            
+            # 🔥 [Debug] 打印原始数据概况 (不会进邮件)
+            print(f"   [DEBUG] {date}: 原始 Put 数量 {len(chain)}")
+            # 打印前2条原始数据，看看 Yahoo 到底给了什么
+            if not chain.empty:
+                print(f"   [DEBUG] Sample:\n{chain[['strike', 'bid', 'ask', 'impliedVolatility']].head(2).to_string(index=False)}")
+            
             min_strike = current_price * 0.95
             max_strike = current_price * 1.02
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
@@ -168,7 +175,9 @@ def scan_schd():
                     "ltcg": ltcg_equiv * 100,
                     "prob": prob * 100
                 })
-        except: continue
+        except Exception as e:
+            print(f"   [DEBUG] 处理 {date} 时出错: {e}")
+            continue
     
     top_ops = sorted(opportunities, key=lambda x: x['ltcg'], reverse=True)[:5]
     
@@ -240,6 +249,12 @@ def scan_amzn():
 
         try:
             chain = stock.option_chain(date).calls
+            
+            # 🔥 [Debug] 打印原始数据概况
+            print(f"   [DEBUG] {date}: 原始 Call 数量 {len(chain)}")
+            if not chain.empty:
+                 print(f"   [DEBUG] Sample:\n{chain[['strike', 'bid', 'ask', 'impliedVolatility']].head(2).to_string(index=False)}")
+                
             min_strike = current_price * 1.08
             max_strike = current_price * 1.20
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
@@ -269,7 +284,9 @@ def scan_amzn():
                     "raw": raw_yield * 100,
                     "ltcg": ltcg_equiv * 100
                 })
-        except: continue
+        except Exception as e:
+            print(f"   [DEBUG] 处理 {date} 时出错: {e}")
+            continue
 
     top_ops = sorted(opportunities, key=lambda x: x['ltcg'], reverse=True)[:5]
     
