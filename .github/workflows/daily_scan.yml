@@ -27,6 +27,7 @@ jobs:
       - name: Run Scanner
         env:
           # 这里把 Secrets 传给 Python
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
