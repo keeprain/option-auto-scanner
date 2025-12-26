@@ -34,7 +34,7 @@ def get_gemini_analysis(report_text):
     try:
         genai.configure(api_key=api_key)
         # 使用 Gemini 1.5 Flash (速度快且免费额度高) 或 Gemini Pro
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         
         prompt = f"""
         你是一位专业的期权交易员。请阅读以下 SCHD (Cash-Secured Put) 和 AMZN (Covered Call) 的期权扫描数据。
