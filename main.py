@@ -353,7 +353,7 @@ def scan_amzn():
 
         try:
             chain = stock.option_chain(date).calls
-            min_strike = current_price * 1.08
+            min_strike = current_price * 1.09
             max_strike = current_price * 1.20
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
@@ -468,9 +468,9 @@ def scan_msft():
         try:
             chain = stock.option_chain(date).calls
             
-            # MSFT 和 AMZN 逻辑一样，筛选 8%-20% OTM
-            min_strike = current_price * 1.08
-            max_strike = current_price * 1.20
+            # MSFT 和 AMZN 逻辑一样，筛选 7%-18% OTM
+            min_strike = current_price * 1.07
+            max_strike = current_price * 1.18
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
