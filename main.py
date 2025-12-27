@@ -269,31 +269,29 @@ def scan_schd():
         if current_rsi > 70: report_str += "⚠️ RSI 超买警报 (>70)：股价可能回调，卖 Put 需谨慎！\n"
         if ex_div_date_str != "N/A": report_str += f"📅 下次除息日: {ex_div_date_str}\n"
             
-        # 🔥 UI 终极优化：对齐表头与数据
-        header = f"{'到期日':<12} {'行权价':<10} {'Bid/Ask':<12} {'挂单价':<8} {'真实年化%':<10} {'双吃税前%':<10} {'真实LTCG%':<10} {'概率':<8}\n"
-        report_str += header + "-" * 95 + "\n"
+        # 🔥 UI 强力对齐优化 (宽间距)
+        # 手动对齐中文表头，不依赖自动 padding
+        header = (
+            "到期日          行权价      Bid/Ask         挂单价      真实年化%     双吃税前%     真实LTCG%     概率      \n"
+        )
+        report_str += header + "-" * 115 + "\n"
         
         for op in top_ops:
             date_disp = op['date'] + ("*" if op.get('div_impact') else "")
             bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
-            # 格式化百分比
-            raw_yield_str = f"{op['raw_yield']:.2f}"
-            gross_str = f"{op['gross']:.2f}"
-            ltcg_str = f"{op['ltcg']:.2f}"
-            prob_str = f"{op['prob']:.1f}%"
             
+            # 使用宽间距格式化
             report_str += (
-                f"{date_disp:<12} "
-                f"{op['strike']:<10.2f} "
-                f"{bid_ask_str:<12} "
-                f"{op['price']:<8.2f} "
-                f"{raw_yield_str:<10} "
-                f"{gross_str:<10} "
-                f"{ltcg_str:<10} "
-                f"{prob_str:<8}\n"
+                f"{date_disp:<15} "
+                f"{op['strike']:<11.2f} "
+                f"{bid_ask_str:<15} "
+                f"{op['price']:<11.2f} "
+                f"{op['raw_yield']:<13.2f} "
+                f"{op['gross']:<13.2f} "
+                f"{op['ltcg']:<13.2f} "
+                f"{op['prob']:.1f}%\n"
             )
-        report_str += "-" * 95 + "\n"
-        report_str += "💡 注: '真实'收益已剔除除息日股价下跌影响及实值水分。\n"
+        report_str += "-" * 115 + "\n"
         
     return current_price, top_ops, report_str
 
@@ -382,28 +380,27 @@ def scan_amzn():
         if current_rsi < 30: report_str += "🛑 RSI 超卖警报 (<30)：股价随时反弹，建议空仓观望！\n"
         if earnings_limit_date: report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
-        # 🔥 UI 终极优化
-        header = f"{'到期日':<12} {'行权价':<10} {'价差%':<10} {'Bid/Ask':<12} {'挂单价':<8} {'税前%':<8} {'LTCG%':<8} {'概率':<8}\n"
-        report_str += header + "-" * 95 + "\n"
+        # 🔥 UI 强力对齐优化 (宽间距)
+        header = (
+            "到期日          行权价      价差%       Bid/Ask         挂单价      税前%       LTCG%       概率      \n"
+        )
+        report_str += header + "-" * 115 + "\n"
         
         for op in top_ops:
             otm_str = f"{op['otm']:.2f}%"
             bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
-            raw_str = f"{op['raw_yield']:.1f}"
-            ltcg_str = f"{op['ltcg']:.1f}"
-            prob_str = f"{op['prob']:.1f}%"
 
             report_str += (
-                f"{op['date']:<12} "
-                f"{op['strike']:<10.0f} "
-                f"{otm_str:<10} "
-                f"{bid_ask_str:<12} "
-                f"{op['price']:<8.2f} "
-                f"{raw_str:<8} "
-                f"{ltcg_str:<8} "
-                f"{prob_str:<8}\n"
+                f"{op['date']:<15} "
+                f"{op['strike']:<11.0f} "
+                f"{otm_str:<11} "
+                f"{bid_ask_str:<15} "
+                f"{op['price']:<11.2f} "
+                f"{op['raw_yield']:<11.1f} "
+                f"{op['ltcg']:<11.1f} "
+                f"{op['prob']:.1f}%\n"
             )
-        report_str += "-" * 95 + "\n"
+        report_str += "-" * 115 + "\n"
     else:
         print(f"⚠️ AMZN: 未找到符合 Delta ({TARGET_DELTA_MIN*100:.0f}%-{TARGET_DELTA_MAX*100:.0f}%) 且避开财报的期权")
     
@@ -494,28 +491,27 @@ def scan_msft():
         if current_rsi < 30: report_str += "🛑 RSI 超卖警报 (<30)：股价随时反弹，建议空仓观望！\n"
         if earnings_limit_date: report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
-        # 🔥 UI 终极优化
-        header = f"{'到期日':<12} {'行权价':<10} {'价差%':<10} {'Bid/Ask':<12} {'挂单价':<8} {'税前%':<8} {'LTCG%':<8} {'概率':<8}\n"
-        report_str += header + "-" * 95 + "\n"
+        # 🔥 UI 强力对齐优化 (宽间距)
+        header = (
+            "到期日          行权价      价差%       Bid/Ask         挂单价      税前%       LTCG%       概率      \n"
+        )
+        report_str += header + "-" * 115 + "\n"
         
         for op in top_ops:
             otm_str = f"{op['otm']:.2f}%"
-            prob_str = f"{op['prob']:.1f}%"
-            ltcg_str = f"{op['ltcg']:.1f}"
-            raw_str = f"{op['raw_yield']:.1f}"
             bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
 
             report_str += (
-                f"{op['date']:<12} "
-                f"{op['strike']:<10.0f} "
-                f"{otm_str:<10} "
-                f"{bid_ask_str:<12} "
-                f"{op['price']:<8.2f} "
-                f"{raw_str:<8} "
-                f"{ltcg_str:<8} "
-                f"{prob_str:<8}\n"
+                f"{op['date']:<15} "
+                f"{op['strike']:<11.0f} "
+                f"{otm_str:<11} "
+                f"{bid_ask_str:<15} "
+                f"{op['price']:<11.2f} "
+                f"{op['raw_yield']:<11.1f} "
+                f"{op['ltcg']:<11.1f} "
+                f"{op['prob']:.1f}%\n"
             )
-        report_str += "-" * 95 + "\n"
+        report_str += "-" * 115 + "\n"
     else:
         print(f"⚠️ MSFT: 未找到符合 Delta ({TARGET_DELTA_MIN*100:.0f}%-{TARGET_DELTA_MAX*100:.0f}%) 且避开财报的期权")
     
@@ -569,8 +565,8 @@ def job():
         print("🤖 正在请求 Gemini 进行分析...")
         gemini_analysis = get_gemini_analysis(full_report)
         print("🤖 分析完成")
-
-        # 🔥 [新增] RSI 策略速查表
+        
+        # 🔥 RSI 策略速查表
         rsi_cheat_sheet = (
             "\n" + "="*40 + "\n"
             "📊 [RSI 策略速查]\n"
@@ -580,6 +576,7 @@ def job():
         )
         
         final_body = full_report + "\n" + "="*40 + "\n🤖 [Gemini 智能分析建议]\n" + "="*40 + "\n" + gemini_analysis
+        final_body += rsi_cheat_sheet
         final_body += f"\n\n(自动生成于: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC)"
         
         subject = f"{subject_prefix} " + " | ".join(title_parts)
