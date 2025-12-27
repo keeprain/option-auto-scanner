@@ -16,14 +16,19 @@ DEFAULT_SPAXX_YIELD = 0.034
 TAX_ST = 0.37       # 短期税率
 TAX_LT = 0.238      # 长期税率
 
-# 邮件通知触发门槛
-DEFAULT_THRESHOLD_SCHD = 11.0
+# 邮件通知触发门槛 (年化收益率 %)
+DEFAULT_THRESHOLD_SCHD = 10.0
 DEFAULT_THRESHOLD_AMZN = 2.0
 DEFAULT_THRESHOLD_MSFT = 2.0
 
 # 流动性风控配置
-# 最大允许价差比例。例如 0.6 表示如果 (Ask-Bid)/Ask > 60%，则认为流动性太差，丢弃。
-MAX_SPREAD_RATIO = 0.6 
+MAX_SPREAD_RATIO = 0.6  # Bid/Ask 价差超过 60% 丢弃
+MIN_PREMIUM = 0.20      # 权利金少于 $20 不做 (手续费不划算)
+
+# 策略风控配置
+TARGET_DELTA_MIN = 0.05 # Delta 下限 (5% 概率)
+TARGET_DELTA_MAX = 0.15 # Delta 上限 (15% 概率)
+RSI_PERIOD = 14         # RSI 计算周期
 
 # 数据保存文件名
 HISTORY_FILE = "option_history.csv"
@@ -33,34 +38,32 @@ def clean_str(text):
     if not text: return ""
     return str(text).replace(u'\xa0', ' ').strip()
 
-# === 辅助函数：保存数据到 CSV (包含 Bid/Ask) ===
+# === 辅助函数：计算 RSI (相对强弱指数) ===
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# === 辅助函数：保存数据到 CSV ===
 def save_history_to_csv(schd_items, amzn_items, msft_items):
     all_records = []
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-    if schd_items:
-        for item in schd_items:
-            record = item.copy()
-            record['ticker'] = 'SCHD'
-            record['timestamp'] = timestamp
-            record['type'] = 'Put'
-            all_records.append(record)
-            
-    if amzn_items:
-        for item in amzn_items:
-            record = item.copy()
-            record['ticker'] = 'AMZN'
-            record['timestamp'] = timestamp
-            record['type'] = 'Call'
-            all_records.append(record)
+    # 辅助内部函数
+    def add_records(items, ticker, type_):
+        if items:
+            for item in items:
+                record = item.copy()
+                record['ticker'] = ticker
+                record['timestamp'] = timestamp
+                record['type'] = type_
+                all_records.append(record)
 
-    if msft_items:
-        for item in msft_items:
-            record = item.copy()
-            record['ticker'] = 'MSFT'
-            record['timestamp'] = timestamp
-            record['type'] = 'Call'
-            all_records.append(record)
+    add_records(schd_items, 'SCHD', 'Put')
+    add_records(amzn_items, 'AMZN', 'Call')
+    add_records(msft_items, 'MSFT', 'Call')
 
     if not all_records:
         return
@@ -68,7 +71,7 @@ def save_history_to_csv(schd_items, amzn_items, msft_items):
     df_new = pd.DataFrame(all_records)
     
     # 智能四舍五入
-    numeric_cols = ['strike', 'price', 'bid', 'ask', 'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'mid_raw']
+    numeric_cols = ['strike', 'price', 'bid', 'ask', 'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'mid_raw', 'rsi']
     for col in numeric_cols:
         if col in df_new.columns:
             df_new[col] = df_new[col].astype(float).round(2)
@@ -77,7 +80,7 @@ def save_history_to_csv(schd_items, amzn_items, msft_items):
     columns_order = [
         'timestamp', 'ticker', 'type', 'date', 'strike', 'price', 
         'bid', 'ask', 
-        'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'mid_raw'
+        'ltcg', 'prob', 'raw_yield', 'gross', 'real_profit', 'otm', 'rsi', 'mid_raw'
     ]
     final_cols = [c for c in columns_order if c in df_new.columns]
     df_new = df_new[final_cols]
@@ -89,7 +92,7 @@ def save_history_to_csv(schd_items, amzn_items, msft_items):
     except Exception as e:
         print(f"❌ 保存 CSV 失败: {e}")
 
-# === 辅助函数：调用 Gemini 进行分析 (Prompt 深度修正) ===
+# === 辅助函数：调用 Gemini 进行分析 ===
 def get_gemini_analysis(report_text):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -97,26 +100,21 @@ def get_gemini_analysis(report_text):
     
     try:
         genai.configure(api_key=api_key)
-        # 使用 latest 别名
         model = genai.GenerativeModel('gemini-flash-latest')
         
-        # 🔥🔥🔥 Prompt 核心修改：重新定义概率的含义 🔥🔥🔥
         prompt = f"""
-        你是一位专业的期权卖方交易员（Seller Strategies）。请阅读以下 SCHD (Put), AMZN 和 MSFT (Call) 的扫描数据。
+        你是一位精通量化策略的期权交易员。请分析以下 SCHD, AMZN 和 MSFT 的期权数据。
         
-        【重要定义 - 务必遵守】：
-        1. **概率 (Prob)**：这里指“被行权概率”(Probability of Assignment/ITM)。
-        2. **核心逻辑**：作为期权卖方，我们希望**「概率」越低越好**（意味着更安全，股票不会被卖飞或被迫接盘），同时**「收益率」越高越好**。
-        3. **任务**：请寻找“低风险（低概率）”下的“高性价比”机会。不要推荐那些收益虽高但概率极高（例如 >20%）的危险选项！
-
-        请完成以下任务（总字数 200 字以内）：
+        【策略核心】：
+        1. **Delta防御**：我们只关注行权概率 (Prob) 在 5%-15% 之间的“舒适区”。
+        2. **RSI风控**：
+           - 卖 Call (AMZN/MSFT)：如果 RSI < 30 (超卖)，是极度危险信号（可能有反弹），请强烈警告。
+           - 卖 Put (SCHD)：如果 RSI > 70 (超买)，请警告回调风险。
         
-        1. 【风控核查】：重点核查 SCHD 的「除息日」风险。
-        2. 【策略建议】：
-           - 语气专业客观。
-           - 分别针对 SCHD, AMZN 和 MSFT 推荐一个最佳行权价。
-           - **理由必须基于：在较低的行权概率（安全）下，获得了不错的收益。**
-        3. 【观望建议】：如果所有选项的收益率都很低，或者行权概率都太高（不安全），请直说“建议观望”。
+        【任务】：
+        1. **风控核查**：检查 RSI 状态和财报/除息日风险。
+        2. **最佳推荐**：为每个标的推荐一个“性价比最高”的期权（Delta 低但收益相对不错）。
+        3. **决策建议**：如果 RSI 状态不佳或收益太低，直接建议“空仓观望”。
 
         数据如下：
         {report_text}
@@ -138,7 +136,6 @@ def get_gemini_analysis(report_text):
 def send_notification(subject, body):
     raw_pass = os.environ.get('EMAIL_PASS', '')
     password = raw_pass.replace(u'\xa0', '').replace(' ', '').strip()
-    
     sender = clean_str(os.environ.get('EMAIL_USER'))
     receiver = clean_str(os.environ.get('TO_EMAIL'))
 
@@ -146,14 +143,11 @@ def send_notification(subject, body):
         print("\n⚠️ 未配置邮件 Secrets，跳过发送通知。")
         return
 
-    clean_body = clean_str(body)
-    clean_subject = clean_str(subject)
-
     try:
-        msg = MIMEText(clean_body, 'plain', 'utf-8')
+        msg = MIMEText(clean_str(body), 'plain', 'utf-8')
         msg['From'] = sender
         msg['To'] = receiver
-        msg['Subject'] = Header(clean_subject, 'utf-8')
+        msg['Subject'] = Header(clean_str(subject), 'utf-8')
 
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
         server.login(sender, password)
@@ -179,8 +173,16 @@ def scan_schd():
     stock = yf.Ticker(TICKER)
     
     try:
-        hist = stock.history(period='1d')
+        # 获取3个月历史数据以计算 RSI
+        hist = stock.history(period='3mo')
+        if hist.empty: return None, [], ""
         current_price = hist['Close'].iloc[-1]
+        
+        # 计算 RSI
+        rsi_series = calculate_rsi(hist['Close'])
+        current_rsi = rsi_series.iloc[-1]
+        print(f"📊 SCHD 当前 RSI(14): {current_rsi:.2f}")
+        
     except: return None, [], ""
 
     spaxx_yield = DEFAULT_SPAXX_YIELD
@@ -193,18 +195,14 @@ def scan_schd():
     ex_div_date_obj = None
     ex_div_date_str = "N/A"
     dividend_amount = 0.0
-
     try:
-        if len(stock.dividends) > 0:
-            dividend_amount = stock.dividends.iloc[-1]
-        
+        if len(stock.dividends) > 0: dividend_amount = stock.dividends.iloc[-1]
         cal = stock.calendar
-        # 修复缩进错误: 确保这里的逻辑块缩进正确
         if cal and isinstance(cal, dict) and 'Ex-Dividend Date' in cal:
             dates = cal['Ex-Dividend Date']
-            future_dates = [d for d in dates if d > datetime.now().date()]
-            if future_dates:
-                ex_div_date_obj = min(future_dates)
+            future = [d for d in dates if d > datetime.now().date()]
+            if future:
+                ex_div_date_obj = min(future)
                 ex_div_date_str = ex_div_date_obj.strftime("%Y-%m-%d")
         
         if not ex_div_date_obj:
@@ -214,7 +212,7 @@ def scan_schd():
                 ex_div_date_str = ex_div_date_obj.strftime("%Y-%m-%d")
         
         if ex_div_date_obj:
-            print(f"📅 SCHD 下次除息日: {ex_div_date_str}, 预估分红: ${dividend_amount:.2f}")
+            print(f"📅 SCHD 下次除息日: {ex_div_date_str}")
     except: pass
 
     try:
@@ -226,60 +224,55 @@ def scan_schd():
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
         dte = (dt - datetime.now()).days
+        # 策略优化：锁定 25-50 天 (Theta 衰减最佳区)
         if not (25 <= dte <= 50): continue
         T = dte / 365.0
 
         try:
             chain = stock.option_chain(date).puts
-            min_strike = current_price * 0.95
-            max_strike = current_price * 1.02
+            min_strike = current_price * 0.90
+            max_strike = current_price * 1.05
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
-                bid = row['bid']
-                ask = row['ask']
-                
-                # 流动性过滤
+                bid, ask = row['bid'], row['ask']
                 if bid <= 0 or ask <= 0: continue
                 if (ask - bid) / ask > MAX_SPREAD_RATIO: continue
                 
                 mid = (bid + ask) / 2
                 price = math.floor(mid / 0.05) * 0.05
-                if price <= 0.01: continue
+                # 策略优化：权利金过低不做
+                if price < MIN_PREMIUM: continue
                 
                 iv = row.get('impliedVolatility', 0) or 0.12
                 
-                # 股息调整
-                adj_current_price = current_price
+                adj_price = current_price
                 is_impacted = False
                 if ex_div_date_obj and dt.date() >= ex_div_date_obj:
-                    adj_current_price = current_price - dividend_amount
+                    adj_price = current_price - dividend_amount
                     is_impacted = True
                 
                 prob = calculate_probability(current_price, row['strike'], T, spaxx_yield, iv, 'put')
 
-                intrinsic_value = max(0.0, row['strike'] - adj_current_price)
-                extrinsic_value = price - intrinsic_value
-                if extrinsic_value < 0: extrinsic_value = 0
+                # SCHD 比较稳，放宽一点 Delta 限制 (比如 45% 以下都看，主要看被动收入)
+                if prob > 0.45: continue
+
+                intrinsic = max(0.0, row['strike'] - adj_price)
+                extrinsic = price - intrinsic
+                if extrinsic < 0: extrinsic = 0
                 
-                opt_roi = (extrinsic_value / row['strike']) * (365 / dte)
+                opt_roi = (extrinsic / row['strike']) * (365 / dte)
                 total_gross = opt_roi + spaxx_yield
                 net_yield = total_gross * (1 - TAX_ST)
-                ltcg_equiv = net_yield / (1 - TAX_LT)
+                ltcg = net_yield / (1 - TAX_LT)
                 
                 opportunities.append({
-                    "date": date,
-                    "strike": row['strike'],
-                    "mid_raw": mid,
-                    "bid": bid,   
-                    "ask": ask,   
-                    "price": price,              
-                    "real_profit": extrinsic_value, 
-                    "raw_yield": opt_roi * 100,
-                    "gross": total_gross * 100,
-                    "ltcg": ltcg_equiv * 100,
-                    "prob": prob * 100,
-                    "div_impact": is_impacted
+                    "date": date, "strike": row['strike'], "mid_raw": mid,
+                    "bid": bid, "ask": ask, "price": price,
+                    "real_profit": extrinsic, "raw_yield": opt_roi * 100,
+                    "gross": total_gross * 100, "ltcg": ltcg * 100,
+                    "prob": prob * 100, "div_impact": is_impacted,
+                    "rsi": current_rsi
                 })
         except: continue
     
@@ -287,34 +280,22 @@ def scan_schd():
     
     report_str = ""
     if top_ops:
-        report_str += f"🔵 [SCHD Put Top 5] (现价 ${current_price:.2f})\n"
-        if ex_div_date_str != "N/A":
-            report_str += f"📅 下次除息日: {ex_div_date_str} (已扣减预估股息 ${dividend_amount:.2f})\n"
+        report_str += f"🔵 [SCHD Put] 现价 ${current_price:.2f} | RSI: {current_rsi:.1f}\n"
+        if current_rsi > 70: report_str += "⚠️ RSI 超买警报 (>70)：股价可能回调，卖 Put 需谨慎！\n"
+        if ex_div_date_str != "N/A": report_str += f"📅 下次除息日: {ex_div_date_str}\n"
             
-        header = "到期日        行权价      Bid/Ask     挂单价    真实年化%   双吃税前%   真实LTCG%   概率      \n"
-        report_str += header
-        report_str += "-" * 115 + "\n"
+        header = "到期日        行权价      Bid/Ask     挂单价    真实LTCG%   概率      \n"
+        report_str += header + "-" * 85 + "\n"
         
         for op in top_ops:
-            prob_str = f"{op['prob']:.1f}%"
-            bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
-            
-            date_display = op['date']
-            if op.get('div_impact'):
-                date_display += "*"
-
+            date_disp = op['date'] + ("*" if op.get('div_impact') else "")
             report_str += (
-                f"{date_display:<14} "
-                f"{op['strike']:<12.2f} "
-                f"{bid_ask_str:<12} " 
+                f"{date_disp:<14} {op['strike']:<12.2f} "
+                f"{op['bid']:.2f}/{op['ask']:.2f}   "
                 f"{op['price']:<10.2f} "
-                f"{op['raw_yield']:<12.2f} "
-                f"{op['gross']:<12.2f} "
-                f"{op['ltcg']:<12.2f} "
-                f"{prob_str:<8}\n"
+                f"{op['ltcg']:<12.1f} {op['prob']:<8.1f}%\n"
             )
-        report_str += "-" * 115 + "\n"
-        report_str += "💡 注: '真实'收益已剔除除息日股价下跌影响及实值水分。\n"
+        report_str += "-" * 85 + "\n"
         
     return current_price, top_ops, report_str
 
@@ -325,7 +306,13 @@ def scan_amzn():
     stock = yf.Ticker(TICKER)
     
     try:
-        current_price = stock.history(period='1d')['Close'].iloc[-1]
+        hist = stock.history(period='3mo')
+        if hist.empty: return None, [], ""
+        current_price = hist['Close'].iloc[-1]
+        
+        rsi_series = calculate_rsi(hist['Close'])
+        current_rsi = rsi_series.iloc[-1]
+        print(f"📊 AMZN 当前 RSI(14): {current_rsi:.2f}")
         print(f"📦 AMZN 当前价格: ${current_price:.2f}")
     except: return None, [], ""
 
@@ -333,15 +320,14 @@ def scan_amzn():
     try:
         cal = stock.calendar
         if cal and isinstance(cal, dict) and 'Earnings Date' in cal:
-             earnings_dates = cal['Earnings Date']
-             future_dates = [d for d in earnings_dates if d > datetime.now().date()]
-             if future_dates:
-                 earnings_limit_date = min(future_dates)
-                 print(f"📅 下次财报日: {earnings_limit_date}")
+            dates = cal['Earnings Date']
+            future = [d for d in dates if d > datetime.now().date()]
+            if future:
+                earnings_limit_date = min(future)
+                print(f"📅 下次财报日: {earnings_limit_date}")
     except: pass
     
     if not earnings_limit_date:
-        print("⚠️ 无法确认财报日，将扫描未来 45 天内的期权")
         earnings_limit_date = datetime.now().date() + timedelta(days=45)
 
     try:
@@ -352,53 +338,48 @@ def scan_amzn():
 
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
-        if earnings_limit_date and dt.date() >= earnings_limit_date:
-            continue
-            
+        # 1. 避开财报
+        if earnings_limit_date and dt.date() >= earnings_limit_date: continue
+        
         dte = (dt - datetime.now()).days
-        if dte < 5: continue
+        # 2. 锁定 25-50 天 (最佳时间价值区)
+        if not (25 <= dte <= 50): continue
         
         T = dte / 365.0
 
         try:
             chain = stock.option_chain(date).calls
-            # 🔥 [策略调整] AMZN 目标 Delta < 7%，搜索范围 8%-20% OTM
-            min_strike = current_price * 1.08
-            max_strike = current_price * 1.20
+            # 宽泛扫描，依靠 Delta 精确过滤
+            min_strike = current_price * 1.05
+            max_strike = current_price * 1.30
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
-                bid = row['bid']
-                ask = row['ask']
-                
+                bid, ask = row['bid'], row['ask']
                 if bid <= 0 or ask <= 0: continue
                 if (ask - bid) / ask > MAX_SPREAD_RATIO: continue
 
                 mid = (bid + ask) / 2
                 price = math.floor(mid / 0.05) * 0.05
-                if price <= 0.01: continue
+                # 3. 垃圾单过滤
+                if price < MIN_PREMIUM: continue
                 
                 iv = row.get('impliedVolatility', 0) or 0.25
-                prob_assign = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
+                prob = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
                 
-                # 🔥 [核心风控] AMZN 波动大，但已放宽Strike到8%，所以容忍概率到20%
-                if prob_assign >= 0.20: continue 
+                # 🔥 [Delta 动态防御] 只看 5% - 15% 概率的单子 (兼顾安全与收益)
+                if not (TARGET_DELTA_MIN <= prob <= TARGET_DELTA_MAX): continue
                 
                 otm_pct = (row['strike'] - current_price) / current_price * 100
                 raw_yield = (price / current_price) * (365 / dte)
                 net_yield = raw_yield * (1 - TAX_ST)
-                ltcg_equiv = net_yield / (1 - TAX_LT)
+                ltcg = net_yield / (1 - TAX_LT)
                 
                 opportunities.append({
-                    "date": date,
-                    "strike": row['strike'],
-                    "otm": otm_pct,
-                    "bid": bid,   
-                    "ask": ask,   
-                    "price": price,              
-                    "prob": prob_assign * 100,
-                    "raw_yield": raw_yield * 100,
-                    "ltcg": ltcg_equiv * 100
+                    "date": date, "strike": row['strike'], "otm": otm_pct,
+                    "bid": bid, "ask": ask, "price": price,
+                    "prob": prob * 100, "raw_yield": raw_yield * 100,
+                    "ltcg": ltcg * 100, "rsi": current_rsi
                 })
         except: continue
 
@@ -406,33 +387,25 @@ def scan_amzn():
     
     report_str = ""
     if top_ops:
-        report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 8%-20% OTM)\n"
-        if earnings_limit_date:
-            report_str += f"📅 下次财报日: {earnings_limit_date}\n"
+        report_str += f"📦 [AMZN Call] 现价 ${current_price:.2f} | RSI: {current_rsi:.1f}\n"
+        if current_rsi < 30: report_str += "🛑 RSI 超卖警报 (<30)：股价随时反弹，建议空仓观望！\n"
+        if earnings_limit_date: report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
-        # 🔥 [UI更新] 增加 价差% 列
-        header = "到期日        行权价    价差%     Bid/Ask     挂单价    税前%     LTCG%     概率      \n"
-        report_str += header
-        report_str += "-" * 115 + "\n"
+        header = "到期日        行权价    价差%     Bid/Ask     挂单价    LTCG%     概率      \n"
+        report_str += header + "-" * 95 + "\n"
         
         for op in top_ops:
-            otm_str = f"{op['otm']:.2f}%" # 🔥 [UI更新] 保留2位小数
-            prob_str = f"{op['prob']:.1f}%"
-            bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
-
             report_str += (
-                f"{op['date']:<14} "
-                f"{op['strike']:<10.0f} "
-                f"{otm_str:<10} " # 🔥 [UI更新] 显示价差%
-                f"{bid_ask_str:<12} " 
-                f"{op['price']:<10.2f} "      
-                f"{op['raw_yield']:<10.1f} "  
+                f"{op['date']:<14} {op['strike']:<10.0f} "
+                f"{op['otm']:<10.2f}% "
+                f"{op['bid']:.2f}/{op['ask']:.2f}   "
+                f"{op['price']:<10.2f} "
                 f"{op['ltcg']:<10.1f} "
-                f"{prob_str:<10}\n"
+                f"{op['prob']:<10.1f}%\n"
             )
-        report_str += "-" * 115 + "\n"
+        report_str += "-" * 95 + "\n"
     else:
-        print(f"⚠️ AMZN: 在财报日 ({earnings_limit_date}) 前未找到符合条件的期权")
+        print(f"⚠️ AMZN: 未找到符合 Delta ({TARGET_DELTA_MIN*100:.0f}%-{TARGET_DELTA_MAX*100:.0f}%) 且避开财报的期权")
     
     return current_price, top_ops, report_str
 
@@ -443,7 +416,13 @@ def scan_msft():
     stock = yf.Ticker(TICKER)
     
     try:
-        current_price = stock.history(period='1d')['Close'].iloc[-1]
+        hist = stock.history(period='3mo')
+        if hist.empty: return None, [], ""
+        current_price = hist['Close'].iloc[-1]
+        
+        rsi_series = calculate_rsi(hist['Close'])
+        current_rsi = rsi_series.iloc[-1]
+        print(f"📊 MSFT 当前 RSI(14): {current_rsi:.2f}")
         print(f"📦 MSFT 当前价格: ${current_price:.2f}")
     except: return None, [], ""
 
@@ -451,15 +430,14 @@ def scan_msft():
     try:
         cal = stock.calendar
         if cal and isinstance(cal, dict) and 'Earnings Date' in cal:
-             earnings_dates = cal['Earnings Date']
-             future_dates = [d for d in earnings_dates if d > datetime.now().date()]
-             if future_dates:
-                 earnings_limit_date = min(future_dates)
-                 print(f"📅 下次财报日: {earnings_limit_date}")
+            dates = cal['Earnings Date']
+            future = [d for d in dates if d > datetime.now().date()]
+            if future:
+                earnings_limit_date = min(future)
+                print(f"📅 下次财报日: {earnings_limit_date}")
     except: pass
     
     if not earnings_limit_date:
-        print("⚠️ 无法确认财报日，将扫描未来 45 天内的期权")
         earnings_limit_date = datetime.now().date() + timedelta(days=45)
 
     try:
@@ -470,54 +448,44 @@ def scan_msft():
 
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
-        if earnings_limit_date and dt.date() >= earnings_limit_date:
-            continue
-            
+        if earnings_limit_date and dt.date() >= earnings_limit_date: continue
+        
         dte = (dt - datetime.now()).days
-        if dte < 5: continue
+        if not (25 <= dte <= 50): continue
         
         T = dte / 365.0
 
         try:
             chain = stock.option_chain(date).calls
-            
-            # 🔥 [策略调整] MSFT 目标 Delta < 12%，搜索 7%-20% OTM
-            min_strike = current_price * 1.07  # 7% OTM 起步
-            max_strike = current_price * 1.20
+            min_strike = current_price * 1.05
+            max_strike = current_price * 1.25
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
             for _, row in chain.iterrows():
-                bid = row['bid']
-                ask = row['ask']
-                
+                bid, ask = row['bid'], row['ask']
                 if bid <= 0 or ask <= 0: continue
                 if (ask - bid) / ask > MAX_SPREAD_RATIO: continue
 
                 mid = (bid + ask) / 2
                 price = math.floor(mid / 0.05) * 0.05
-                if price <= 0.01: continue
+                if price < MIN_PREMIUM: continue
                 
                 iv = row.get('impliedVolatility', 0) or 0.25
-                prob_assign = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
+                prob = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
                 
-                # 🔥 [核心风控] MSFT 较稳，但已放宽Strike到7%，所以容忍概率到20%
-                if prob_assign >= 0.20: continue 
+                # 🔥 [Delta 动态防御] 锁定 5%-15%
+                if not (TARGET_DELTA_MIN <= prob <= TARGET_DELTA_MAX): continue
                 
                 otm_pct = (row['strike'] - current_price) / current_price * 100
                 raw_yield = (price / current_price) * (365 / dte)
                 net_yield = raw_yield * (1 - TAX_ST)
-                ltcg_equiv = net_yield / (1 - TAX_LT)
+                ltcg = net_yield / (1 - TAX_LT)
                 
                 opportunities.append({
-                    "date": date,
-                    "strike": row['strike'],
-                    "otm": otm_pct,
-                    "bid": bid,   
-                    "ask": ask,   
-                    "price": price,              
-                    "prob": prob_assign * 100,
-                    "raw_yield": raw_yield * 100,
-                    "ltcg": ltcg_equiv * 100
+                    "date": date, "strike": row['strike'], "otm": otm_pct,
+                    "bid": bid, "ask": ask, "price": price,
+                    "prob": prob * 100, "raw_yield": raw_yield * 100,
+                    "ltcg": ltcg * 100, "rsi": current_rsi
                 })
         except: continue
 
@@ -525,33 +493,25 @@ def scan_msft():
     
     report_str = ""
     if top_ops:
-        report_str += f"📦 [MSFT Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 7%-20% OTM)\n"
-        if earnings_limit_date:
-            report_str += f"📅 下次财报日: {earnings_limit_date}\n"
+        report_str += f"📦 [MSFT Call] 现价 ${current_price:.2f} | RSI: {current_rsi:.1f}\n"
+        if current_rsi < 30: report_str += "🛑 RSI 超卖警报 (<30)：股价随时反弹，建议空仓观望！\n"
+        if earnings_limit_date: report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
-        # 🔥 [UI更新] 增加 价差% 列
-        header = "到期日        行权价    价差%     Bid/Ask     挂单价    税前%     LTCG%     概率      \n"
-        report_str += header
-        report_str += "-" * 115 + "\n"
+        header = "到期日        行权价    价差%     Bid/Ask     挂单价    LTCG%     概率      \n"
+        report_str += header + "-" * 95 + "\n"
         
         for op in top_ops:
-            otm_str = f"{op['otm']:.2f}%" # 🔥 [UI更新] 保留2位小数
-            prob_str = f"{op['prob']:.1f}%"
-            bid_ask_str = f"{op['bid']:.2f}/{op['ask']:.2f}"
-            
             report_str += (
-                f"{op['date']:<14} "
-                f"{op['strike']:<10.0f} "
-                f"{otm_str:<10} " # 🔥 [UI更新] 显示价差%
-                f"{bid_ask_str:<12} " 
-                f"{op['price']:<10.2f} "      
-                f"{op['raw_yield']:<10.1f} "  
+                f"{op['date']:<14} {op['strike']:<10.0f} "
+                f"{op['otm']:<10.2f}% "
+                f"{op['bid']:.2f}/{op['ask']:.2f}   "
+                f"{op['price']:<10.2f} "
                 f"{op['ltcg']:<10.1f} "
-                f"{prob_str:<10}\n"
+                f"{op['prob']:<10.1f}%\n"
             )
-        report_str += "-" * 115 + "\n"
+        report_str += "-" * 95 + "\n"
     else:
-        print(f"⚠️ MSFT: 在财报日 ({earnings_limit_date}) 前未找到符合条件的期权")
+        print(f"⚠️ MSFT: 未找到符合 Delta ({TARGET_DELTA_MIN*100:.0f}%-{TARGET_DELTA_MAX*100:.0f}%) 且避开财报的期权")
     
     return current_price, top_ops, report_str
 
@@ -560,7 +520,6 @@ def job():
     print(f"🚀 任务启动: {datetime.now()} UTC")
     
     run_mode = os.environ.get('RUN_MODE', 'MONITOR')
-    
     if run_mode == 'SUMMARY':
         threshold_schd = -100.0
         threshold_amzn = -100.0
@@ -572,7 +531,7 @@ def job():
         threshold_amzn = DEFAULT_THRESHOLD_AMZN
         threshold_msft = DEFAULT_THRESHOLD_MSFT
         subject_prefix = "🚨 [捡钱机会]"
-        print(f"👀 运行模式: 实时监控 (阈值 SCHD>{threshold_schd}, AMZN>{threshold_amzn}, MSFT>{threshold_msft})")
+        print(f"👀 运行模式: 实时监控 (阈值 SCHD>{threshold_schd}%, AMZN>{threshold_amzn}%, MSFT>{threshold_msft}%)")
 
     # 执行三个扫描
     schd_price, schd_list, schd_text = scan_schd()
@@ -583,13 +542,12 @@ def job():
     if amzn_text: print(amzn_text)
     if msft_text: print(msft_text)
     
-    # 保存数据到 CSV (包含 MSFT)
+    # 保存数据
     save_history_to_csv(schd_list, amzn_list, msft_list)
     
     should_notify = False
     title_parts = []
 
-    # 检查阈值
     if schd_list and schd_list[0]['ltcg'] > threshold_schd:
         should_notify = True
         title_parts.append(f"SCHD {schd_list[0]['ltcg']:.1f}%")
@@ -604,7 +562,6 @@ def job():
 
     if should_notify:
         full_report = schd_text + "\n" + amzn_text + "\n" + msft_text
-        
         print("🤖 正在请求 Gemini 进行分析...")
         gemini_analysis = get_gemini_analysis(full_report)
         print("🤖 分析完成")
