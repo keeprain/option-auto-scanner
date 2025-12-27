@@ -3,7 +3,7 @@ name: Auto Option Scanner
 on:
   schedule:
     # 西雅图时间早上 6:30 到 下午 1:00 (对应 UTC 13:30 - 20:00)
-    # 每 15 分钟运行一次
+    # 每 20 分钟运行一次
     - cron: '*/15 13-21 * * 1-5'
   workflow_dispatch: # 允许手动点击按钮测试
 
