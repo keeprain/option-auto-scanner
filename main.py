@@ -361,8 +361,8 @@ def scan_amzn():
 
         try:
             chain = stock.option_chain(date).calls
-            # 🔥 [策略调整] AMZN 目标 Delta < 7%，扩大搜索到 25% OTM
-            min_strike = current_price * 1.10
+            # 🔥 [策略调整] AMZN 目标 Delta < 7%，扩大搜索到 20% OTM
+            min_strike = current_price * 1.08
             max_strike = current_price * 1.25
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
@@ -479,7 +479,7 @@ def scan_msft():
             chain = stock.option_chain(date).calls
             
             # 🔥 [策略调整] MSFT 目标 Delta < 10%
-            min_strike = current_price * 1.08  # 8% OTM 起步
+            min_strike = current_price * 1.07  # 8% OTM 起步
             max_strike = current_price * 1.20
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
