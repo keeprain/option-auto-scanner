@@ -380,8 +380,8 @@ def scan_amzn():
                 iv = row.get('impliedVolatility', 0) or 0.25
                 prob_assign = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
                 
-                # 🔥 [核心风控] AMZN 波动大，行权概率严格控制在 7% 以内 (一年不卖飞概率 > 50%)
-                if prob_assign >= 0.07: continue 
+                # 🔥 [核心风控] AMZN 波动大，行权概率严格控制在 12% 以内 (一年不卖飞概率 > 11%)
+                if prob_assign >= 0.12: continue 
                 
                 otm_pct = (row['strike'] - current_price) / current_price * 100
                 raw_yield = (price / current_price) * (365 / dte)
@@ -405,7 +405,7 @@ def scan_amzn():
     
     report_str = ""
     if top_ops:
-        report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 安全策略 10-25% OTM)\n"
+        report_str += f"📦 [AMZN Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 安全策略 8-20% OTM)\n"
         if earnings_limit_date:
             report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
@@ -478,8 +478,8 @@ def scan_msft():
         try:
             chain = stock.option_chain(date).calls
             
-            # 🔥 [策略调整] MSFT 目标 Delta < 10%
-            min_strike = current_price * 1.07  # 8% OTM 起步
+            # 🔥 [策略调整] MSFT 目标 Delta < 12%
+            min_strike = current_price * 1.07  # 7% OTM 起步
             max_strike = current_price * 1.20
             chain = chain[(chain['strike'] >= min_strike) & (chain['strike'] <= max_strike)]
             
@@ -498,7 +498,7 @@ def scan_msft():
                 prob_assign = calculate_probability(current_price, row['strike'], T, DEFAULT_SPAXX_YIELD, iv, 'call')
                 
                 # 🔥 [核心风控] MSFT 较稳，容忍度控制在 10% 以内
-                if prob_assign >= 0.10: continue 
+                if prob_assign >= 0.12: continue 
                 
                 otm_pct = (row['strike'] - current_price) / current_price * 100
                 raw_yield = (price / current_price) * (365 / dte)
@@ -522,7 +522,7 @@ def scan_msft():
     
     report_str = ""
     if top_ops:
-        report_str += f"📦 [MSFT Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 安全策略 8-20% OTM)\n"
+        report_str += f"📦 [MSFT Call Top 5] (现价 ${current_price:.2f} | 财报日前 | 安全策略 7-20% OTM)\n"
         if earnings_limit_date:
             report_str += f"📅 下次财报日: {earnings_limit_date}\n"
 
