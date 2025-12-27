@@ -17,9 +17,9 @@ TAX_ST = 0.37       # 短期税率
 TAX_LT = 0.238      # 长期税率
 
 # 邮件通知触发门槛
-DEFAULT_THRESHOLD_SCHD = 10.0
-DEFAULT_THRESHOLD_AMZN = 3.0
-DEFAULT_THRESHOLD_MSFT = 3.0
+DEFAULT_THRESHOLD_SCHD = 11.0
+DEFAULT_THRESHOLD_AMZN = 2.0
+DEFAULT_THRESHOLD_MSFT = 2.0
 
 # 流动性风控配置
 # 最大允许价差比例。例如 0.6 表示如果 (Ask-Bid)/Ask > 60%，则认为流动性太差，丢弃。
