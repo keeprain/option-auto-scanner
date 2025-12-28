@@ -29,6 +29,7 @@ MIN_PREMIUM = 0.15      # 权利金少于 $15 不做
 TARGET_DELTA_MIN = 0.01 # Delta 下限 (1%)
 TARGET_DELTA_MAX = 0.09 # Delta 上限 (9%)
 RSI_PERIOD = 14         # RSI 计算周期
+EARNINGS_BUFFER_DAYS = 7 # 🔥 [新增] 财报前缓冲期 (天)，避开财报前一周的波动
 
 # 数据保存文件名
 HISTORY_FILE = "option_history.csv"
@@ -343,7 +344,11 @@ def scan_amzn():
 
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
-        if earnings_limit_date and dt.date() >= earnings_limit_date: continue
+
+        # 🔥 [风控更新] 财报缓冲区过滤
+        if earnings_limit_date:
+            buffer_date = earnings_limit_date - timedelta(days=EARNINGS_BUFFER_DAYS)
+            if dt.date() >= buffer_date: continue
         
         dte = (dt - datetime.now()).days
         if not (25 <= dte <= 50): continue
@@ -455,7 +460,11 @@ def scan_msft():
 
     for date in dates:
         dt = datetime.strptime(date, "%Y-%m-%d")
-        if earnings_limit_date and dt.date() >= earnings_limit_date: continue
+
+        # 🔥 [风控更新] 财报缓冲区过滤
+        if earnings_limit_date:
+            buffer_date = earnings_limit_date - timedelta(days=EARNINGS_BUFFER_DAYS)
+            if dt.date() >= buffer_date: continue
         
         dte = (dt - datetime.now()).days
         if not (25 <= dte <= 50): continue
